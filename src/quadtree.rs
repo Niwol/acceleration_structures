@@ -9,7 +9,11 @@ pub struct Quadtree<T> {
     next_id: u64,
 }
 
-struct Node {
+pub struct NodeIter<'a> {
+    nodes_to_process: Vec<&'a Node>,
+}
+
+pub struct Node {
     region: Rect,
     elements: HashMap<u64, Rect>,
     children: Option<Box<[Node; 4]>>,
@@ -53,6 +57,30 @@ impl<'a, T> EntryMut<'a, T> {
 }
 
 impl Node {
+    pub fn is_leaf(&self) -> bool {
+        self.children.is_none()
+    }
+
+    pub fn is_node(&self) -> bool {
+        self.children.is_some()
+    }
+
+    pub fn region(&self) -> Rect {
+        self.region
+    }
+
+    pub fn elements(&self) -> &HashMap<u64, Rect> {
+        &self.elements
+    }
+
+    pub fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
     fn new(region: Rect) -> Self {
         Self {
             region,
@@ -215,10 +243,6 @@ impl Node {
         self.elements.extend(children_elements);
     }
 
-    fn is_leaf(&self) -> bool {
-        self.children.is_none()
-    }
-
     fn move_element(
         &mut self,
         id: u64,
@@ -354,6 +378,12 @@ impl<T> Quadtree<T> {
         }
     }
 
+    pub fn nodes<'a>(&'a self) -> NodeIter<'a> {
+        NodeIter {
+            nodes_to_process: vec![&self.root],
+        }
+    }
+
     fn move_element(&mut self, id: u64, old_region: Rect, new_region: Rect) {
         self.root
             .move_element(id, old_region, new_region, self.max_node_capacity);
@@ -377,6 +407,24 @@ impl<T> Default for Quadtree<T> {
             elements: HashMap::new(),
             next_id: 0,
         }
+    }
+}
+
+impl<'a> Iterator for NodeIter<'a> {
+    type Item = &'a Node;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(node) = self.nodes_to_process.pop() {
+            if let Some(children) = &node.children {
+                for child in children.as_ref() {
+                    self.nodes_to_process.push(child);
+                }
+            }
+
+            return Some(node);
+        }
+
+        None
     }
 }
 
