@@ -264,9 +264,11 @@ impl Node {
                     return;
                 }
             }
-        } else {
-            *self.elements.get_mut(&id).unwrap() = new_region;
         }
+
+        self.elements.remove(&id);
+        self.size -= 1;
+        self.insert(id, new_region, max_node_capacity);
     }
 }
 
@@ -717,6 +719,28 @@ mod node_tests {
 
         assert!(!node.elements.contains_key(&0));
         assert!(node.children.unwrap()[2].elements.contains_key(&0));
+
+        assert_eq!(node.size, 4);
+    }
+
+    #[test]
+    fn moving_element_to_child() {
+        let mut node = Node::new(Rect::new(0.0, 0.0, 50.0, 50.0));
+        let max_node_capacity = 3;
+        node.insert(0, Rect::new(10.0, 10.0, 10.0, 10.0), max_node_capacity);
+        node.insert(1, Rect::new(20.0, 20.0, 10.0, 10.0), max_node_capacity);
+        node.insert(2, Rect::new(30.0, 10.0, 10.0, 20.0), max_node_capacity);
+        node.insert(3, Rect::new(10.0, 15.0, 20.0, 20.0), max_node_capacity);
+
+        node.move_element(
+            1,
+            Rect::new(20.0, 20.0, 10.0, 10.0),
+            Rect::new(10.0, 30.0, 10.0, 10.0),
+            max_node_capacity,
+        );
+
+        assert!(!node.elements.contains_key(&1));
+        assert!(node.children.unwrap()[2].elements.contains_key(&1));
 
         assert_eq!(node.size, 4);
     }
