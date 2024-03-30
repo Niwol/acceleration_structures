@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug};
 
 use crate::rect::Rect;
 
@@ -13,6 +13,7 @@ pub struct NodeIter<'a> {
     nodes_to_process: Vec<&'a Node>,
 }
 
+#[derive(Debug)]
 pub struct Node {
     region: Rect,
     elements: HashMap<u64, Rect>,
@@ -36,14 +37,22 @@ impl<'a, T> Entry<'a, T> {
         &self.owner.elements[&self.id].0
     }
 
+    pub fn region(&self) -> Rect {
+        self.owner.elements[&self.id].1
+    }
+
     pub fn id(&self) -> u64 {
         self.id
     }
 }
 
-impl<'a, T> EntryMut<'a, T> {
+impl<'a, T: Debug> EntryMut<'a, T> {
     pub fn value(&self) -> &T {
         &self.owner.elements[&self.id].0
+    }
+
+    pub fn region(&self) -> Rect {
+        self.owner.elements[&self.id].1
     }
 
     pub fn id(&self) -> u64 {
@@ -92,18 +101,24 @@ impl Node {
     }
 
     fn insert(&mut self, id: u64, region: Rect, max_node_capacity: usize) {
-        assert!(self.region.contains(&region));
+        assert!(
+            self.region.contains(&region),
+            "Trying to insert element with id {} and region {:?} whitch is not contained in nodes region: {:?}",
+            id,
+            region,
+            self.region
+        );
+
+        self.size += 1;
 
         if self.is_leaf() && self.elements.len() < max_node_capacity {
             self.elements.insert(id, region);
-            self.size += 1;
             return;
         }
 
         if self.is_leaf() && self.elements.len() == max_node_capacity {
             self.subdivide(max_node_capacity);
         }
-        self.size += 1;
 
         for child in self.children.as_mut().unwrap().iter_mut() {
             if child.region.contains(&region) {
@@ -116,8 +131,6 @@ impl Node {
     }
 
     fn subdivide(&mut self, max_node_capacity: usize) {
-        let mut new_self = Node::new(self.region);
-
         let children_w = self.region.w / 2.0;
         let children_h = self.region.h / 2.0;
 
@@ -140,13 +153,24 @@ impl Node {
             child.depth = self.depth + 1;
         }
 
-        new_self.children = Some(Box::new(children));
+        let old_elements = std::mem::take(&mut self.elements);
 
-        for (id, region) in self.elements.iter() {
-            new_self.insert(*id, *region, max_node_capacity);
+        for (id, region) in old_elements {
+            let mut inserted = false;
+            for child in children.iter_mut() {
+                if child.region.contains(&region) {
+                    child.insert(id, region, max_node_capacity);
+                    inserted = true;
+                    break;
+                }
+            }
+
+            if !inserted {
+                self.elements.insert(id, region);
+            }
         }
 
-        *self = new_self;
+        self.children = Some(Box::new(children));
     }
 
     fn get_all(&self) -> Vec<u64> {
@@ -229,12 +253,12 @@ impl Node {
     }
 
     fn fuse(&mut self) {
-        debug_assert!(!self.is_leaf());
+        debug_assert!(self.is_node());
         let mut children_elements = HashMap::new();
 
-        let children = self.children.take();
+        let children = self.children.take().unwrap();
 
-        for child in children.unwrap().into_iter() {
+        for child in children.into_iter() {
             debug_assert!(child.is_leaf());
 
             children_elements.extend(child.elements);
@@ -284,7 +308,7 @@ impl<T> Quadtree<T> {
     }
 
     pub fn is_empty(&self) -> bool {
-        true
+        self.elements.is_empty()
     }
 
     pub fn size(&self) -> usize {
@@ -389,6 +413,8 @@ impl<T> Quadtree<T> {
     fn move_element(&mut self, id: u64, old_region: Rect, new_region: Rect) {
         self.root
             .move_element(id, old_region, new_region, self.max_node_capacity);
+
+        self.elements.get_mut(&id).unwrap().1 = new_region;
     }
 }
 
@@ -453,6 +479,7 @@ mod tests {
 
         assert!(quadtree.contains(&42));
         assert_eq!(quadtree.size(), 1);
+        assert!(!quadtree.is_empty());
     }
 
     #[test]
@@ -589,6 +616,44 @@ mod tests {
             quadtree.get_contained(Rect::new(20.0, 20.0, 5.0, 5.0)),
             vec![&42]
         );
+    }
+
+    // Iteration
+    #[test]
+    fn move_elements_in_iteration() {
+        let mut quadtree = Quadtree::default();
+
+        let e1 = quadtree.insert(1, Rect::new(10.0, 10.0, 10.0, 10.0));
+        let e2 = quadtree.insert(2, Rect::new(-5.0, 10.0, 10.0, 10.0));
+        let e3 = quadtree.insert(3, Rect::new(10.0, -5.0, 10.0, 10.0));
+        let e4 = quadtree.insert(4, Rect::new(10.0, 1.0, 10.0, 10.0));
+        let e5 = quadtree.insert(5, Rect::new(10.0, -9.0, 10.0, 10.0));
+        let e6 = quadtree.insert(6, Rect::new(10.0, 20.0, 10.0, 10.0));
+        let e7 = quadtree.insert(7, Rect::new(0.0, 10.0, 10.0, 10.0));
+
+        for mut entry in quadtree.entries_mut() {
+            let mut region = entry.region();
+            region.y -= 2.0;
+            entry.move_entry(region);
+        }
+
+        assert!(quadtree.root.is_node());
+
+        assert!(quadtree.root.children.as_ref().unwrap()[3]
+            .elements
+            .contains_key(&e1));
+        assert!(quadtree.root.elements.contains_key(&e2));
+        assert!(quadtree.root.elements.contains_key(&e3));
+        assert!(quadtree.root.elements.contains_key(&e4));
+        assert!(quadtree.root.children.as_ref().unwrap()[1]
+            .elements
+            .contains_key(&e5));
+        assert!(quadtree.root.children.as_ref().unwrap()[3]
+            .elements
+            .contains_key(&e6));
+        assert!(quadtree.root.children.as_ref().unwrap()[3]
+            .elements
+            .contains_key(&e7));
     }
 }
 
